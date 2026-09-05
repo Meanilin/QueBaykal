@@ -1,0 +1,39 @@
+services:
+  bot:
+    build: .
+    container_name: cinema-queue-bot
+    env_file: .env
+    environment:
+      # Креды для подключения к Postgres
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-cinema}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cinema_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-cinema_queue}
+      # Полная строка подключения (те же креды)
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cinema}:${POSTGRES_PASSWORD:-cinema_secret}@postgres:5432/${POSTGRES_DB:-cinema_queue}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: cinema-queue-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cinema}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cinema_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-cinema_queue}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cinema} -d ${POSTGRES_DB:-cinema_queue}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
