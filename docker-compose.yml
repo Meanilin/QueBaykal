@@ -1,21 +1,36 @@
+x-app-env: &app-env
+  env_file: .env
+  environment:
+    # Креды для подключения к Postgres
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    POSTGRES_USER: ${POSTGRES_USER:-cinema}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cinema_secret}
+    POSTGRES_DB: ${POSTGRES_DB:-cinema_queue}
+    # Полная строка подключения (те же креды)
+    DATABASE_URL: postgresql://${POSTGRES_USER:-cinema}:${POSTGRES_PASSWORD:-cinema_secret}@postgres:5432/${POSTGRES_DB:-cinema_queue}
+
 services:
+  migrate:
+    build: .
+    container_name: cinema-queue-migrate
+    <<: *app-env
+    command: alembic upgrade head
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   bot:
     build: .
     container_name: cinema-queue-bot
-    env_file: .env
-    environment:
-      # Креды для подключения к Postgres
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: "5432"
-      POSTGRES_USER: ${POSTGRES_USER:-cinema}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cinema_secret}
-      POSTGRES_DB: ${POSTGRES_DB:-cinema_queue}
-      # Полная строка подключения (те же креды)
-      DATABASE_URL: postgresql://${POSTGRES_USER:-cinema}:${POSTGRES_PASSWORD:-cinema_secret}@postgres:5432/${POSTGRES_DB:-cinema_queue}
+    <<: *app-env
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   postgres:
     image: postgres:16-alpine
