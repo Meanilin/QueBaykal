@@ -78,13 +78,13 @@ def upgrade() -> None:
         sa.Column("media_file_id", sa.Integer(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["session_id"], ["vote_sessions.id"], ondelete='CASCADE'),
         sa.ForeignKeyConstraint(["submitted_by_user_id"], ["users.id"], ondelete='CASCADE'),
         sa.ForeignKeyConstraint(["media_file_id"], ["media_files.id"], ondelete='SET NULL'),
+        sa.ForeignKeyConstraint(["session_id"], ["vote_sessions.id"], ondelete='CASCADE'),
     )
     op.create_index("ix_event_movies_status", "event_movies", ["status"])
-    op.create_index("ix_event_movies_session_reaction", "event_movies", ["session_id", "reaction_count"])
     op.create_index("ix_event_movies_normalized_title", "event_movies", ["normalized_title"])
+    op.create_index("ix_event_movies_session_reaction", "event_movies", ["session_id", "reaction_count"])
 
     op.create_table(
         "media_files",
@@ -118,8 +118,8 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
     )
     op.create_index("ix_scheduled_jobs_next_run", "scheduled_jobs", ["next_run_time"])
-    op.create_index("ix_scheduled_jobs_status", "scheduled_jobs", ["status"])
     op.create_index("ix_scheduled_jobs_next_run_time", "scheduled_jobs", ["next_run_time"])
+    op.create_index("ix_scheduled_jobs_status", "scheduled_jobs", ["status"])
 
     op.create_table(
         "tv_devices",
@@ -167,14 +167,35 @@ def upgrade() -> None:
         sa.Column("top_n", sa.Integer(), nullable=False, server_default=sa.text('5')),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["chat_id"], ["chats.id"], ondelete='CASCADE'),
-        sa.ForeignKeyConstraint(["winner_movie_id"], ["event_movies.id"], ondelete='SET NULL'),
-        sa.ForeignKeyConstraint(["tv_device_id"], ["tv_devices.id"], ondelete='CASCADE'),
         sa.ForeignKeyConstraint(["created_by_user_id"], ["users.id"], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(["tv_device_id"], ["tv_devices.id"], ondelete='CASCADE'),
         sa.ForeignKeyConstraint(["booking_id"], ["bookings.id"], ondelete='SET NULL'),
+        sa.ForeignKeyConstraint(["winner_movie_id"], ["event_movies.id"], ondelete='SET NULL'),
+        sa.ForeignKeyConstraint(["chat_id"], ["chats.id"], ondelete='CASCADE'),
     )
     op.create_index("ix_vote_sessions_chat_state", "vote_sessions", ["chat_id", "state"])
     op.create_index("ix_vote_sessions_scheduled", "vote_sessions", ["scheduled_start"])
+
+    op.create_table(
+        "audit_log",
+        sa.Column("id", sa.Integer(), nullable=False, primary_key=True),
+        sa.Column("chat_id", sa.Integer(), nullable=True),
+        sa.Column("user_id", sa.Integer(), nullable=True),
+        sa.Column("action", sa.Enum("booking_create", "booking_confirm", "booking_cancel", "booking_override", "vote_start", "vote_end", "vote_cancel", "vote_retry", "vote_provide_link", "vote_force_stop", "vote_resolve_overrun", "tv_bind", "tv_unbind", "user_role_change", "settings_change", name="audit_action"), nullable=False),
+        sa.Column("target_type", sa.String(length=32), nullable=True),
+        sa.Column("target_id", sa.Integer(), nullable=True),
+        sa.Column("details_json", sa.Text(), nullable=True),
+        sa.Column("ip_address", sa.String(length=45), nullable=True),
+        sa.Column("user_agent", sa.String(length=256), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(["chat_id"], ["chats.id"], ondelete='SET NULL'),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete='SET NULL'),
+    )
+    op.create_index("ix_audit_log_chat_created", "audit_log", ["chat_id", "created_at"])
+    op.create_index("ix_audit_log_user_id", "audit_log", ["user_id"])
+    op.create_index("ix_audit_log_chat_id", "audit_log", ["chat_id"])
+    op.create_index("ix_audit_log_user_created", "audit_log", ["user_id", "created_at"])
+    op.create_index("ix_audit_log_action", "audit_log", ["action"])
 
     op.create_table(
         "chat_members",
@@ -183,12 +204,12 @@ def upgrade() -> None:
         sa.Column("user_id", sa.Integer(), nullable=False),
         sa.Column("role", sa.Enum("member", "admin", "root", name="user_role"), nullable=False, server_default=sa.text('member')),
         sa.Column("joined_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["chat_id"], ["chats.id"], ondelete='CASCADE'),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(["chat_id"], ["chats.id"], ondelete='CASCADE'),
     )
     op.create_unique_constraint("uq_chat_members_chat_user", "chat_members", ["chat_id", "user_id"])
-    op.create_index("ix_chat_members_chat_id", "chat_members", ["chat_id"])
     op.create_index("ix_chat_members_user", "chat_members", ["user_id"])
+    op.create_index("ix_chat_members_chat_id", "chat_members", ["chat_id"])
 
     op.create_table(
         "chat_tv_bindings",
@@ -212,8 +233,8 @@ def upgrade() -> None:
         sa.Column("vote_type", sa.Enum("fire", "final", name="vote_type"), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["session_id"], ["vote_sessions.id"], ondelete='CASCADE'),
-        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete='CASCADE'),
         sa.ForeignKeyConstraint(["movie_id"], ["event_movies.id"], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete='CASCADE'),
     )
     op.create_unique_constraint("uq_vote_session_user_type_movie", "votes", ["session_id", "user_id", "vote_type", "movie_id"])
     op.create_index("ix_votes_session_type", "votes", ["session_id", "vote_type"])
@@ -223,6 +244,7 @@ def downgrade() -> None:
     op.drop_table("votes")
     op.drop_table("chat_tv_bindings")
     op.drop_table("chat_members")
+    op.drop_table("audit_log")
     op.drop_table("vote_sessions")
     op.drop_table("users")
     op.drop_table("tv_devices")

@@ -61,6 +61,15 @@ __all__ = [
     "schedule_voting_reminders",
     "voting_phase_reminder",
     "set_reminders_enabled",
+    # observability
+    "ObservabilityError",
+    "log_admin_action",
+    "get_audit_log",
+    "extract_correlation_id",
+    "MetricsCollector",
+    "metrics",
+    "init_sentry",
+    "get_system_status",
 ]
 
 
@@ -97,6 +106,16 @@ from services.notifications import (
     schedule_voting_reminders,
     voting_phase_reminder,
     set_reminders_enabled,
+)
+from services.observability import (
+    ObservabilityError,
+    log_admin_action,
+    get_audit_log,
+    extract_correlation_id,
+    MetricsCollector,
+    metrics,
+    init_sentry,
+    get_system_status,
 )
 from services.scheduler import SchedulerManager, get_scheduler_manager
 from services.tv_delivery import (

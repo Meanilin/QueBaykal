@@ -89,6 +89,25 @@ class VoteSessionState(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+class AuditAction(str, enum.Enum):
+    """Types of admin actions for audit log."""
+    BOOKING_CREATE = "booking_create"
+    BOOKING_CONFIRM = "booking_confirm"
+    BOOKING_CANCEL = "booking_cancel"
+    BOOKING_OVERRIDE = "booking_override"
+    VOTE_START = "vote_start"
+    VOTE_END = "vote_end"
+    VOTE_CANCEL = "vote_cancel"
+    VOTE_RETRY = "vote_retry"
+    VOTE_PROVIDE_LINK = "vote_provide_link"
+    VOTE_FORCE_STOP = "vote_force_stop"
+    VOTE_RESOLVE_OVERRUN = "vote_resolve_overrun"
+    TV_BIND = "tv_bind"
+    TV_UNBIND = "tv_unbind"
+    USER_ROLE_CHANGE = "user_role_change"
+    SETTINGS_CHANGE = "settings_change"
+
+
 class EventMovieStatus(str, enum.Enum):
     """Status of a movie proposal within a vote session."""
 
@@ -531,6 +550,8 @@ class Vote(Base):
 
 __all__ = [
     "Base",
+    "AuditAction",
+    "AuditLog",
     "Booking",
     "BookingStatus",
     "Chat",
@@ -569,3 +590,41 @@ class MediaFile(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class AuditLog(Base):
+    """Audit log for admin actions."""
+
+    __tablename__ = "audit_log"
+    __table_args__ = (
+        Index("ix_audit_log_chat_created", "chat_id", "created_at"),
+        Index("ix_audit_log_user_created", "user_id", "created_at"),
+        Index("ix_audit_log_action", "action"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chat_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chats.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    action: Mapped[AuditAction] = mapped_column(
+        Enum(
+            AuditAction,
+            name="audit_action",
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+    )
+    target_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    target_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    chat: Mapped[Chat | None] = relationship()
+    user: Mapped[User | None] = relationship()

@@ -39,11 +39,13 @@ async def main() -> None:
     from bot.handlers import voting as voting_handlers
     from bot.handlers import downloader as downloader_handlers
     from bot.handlers import notifications as notification_handlers
+    from bot.handlers import observability as observability_handlers
     base_handlers.register(dp)
     booking_handlers.register(dp)
     voting_handlers.register(dp)
     downloader_handlers.register(dp)
     notification_handlers.register(dp)
+    observability_handlers.register(dp)
 
     # Scheduler manager
     from services.scheduler import SchedulerManager
