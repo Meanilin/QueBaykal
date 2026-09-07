@@ -1,7 +1,17 @@
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
 .env
+.env.local
+*.egg-info/
+build/
+dist/
 .DS_Store
 .idea/
 .vscode/
