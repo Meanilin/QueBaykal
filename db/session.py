@@ -70,8 +70,10 @@ __all__ = [
     "create_session_factory",
     "get_session",
     "session_scope",
+    "async_session_maker",  # global factory for workers/scheduler
 ]
 
 
-# Avoid unused import warning
-_ = Any
+# Global session factory (initialized in bot/__main__.py or api/__main__.py)
+from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+async_session_maker: async_sessionmaker[AsyncSession] | None = None

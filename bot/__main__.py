@@ -35,7 +35,24 @@ async def main() -> None:
 
     # Register base handlers
     from bot.handlers import base as base_handlers
+    from bot.handlers import bookings as booking_handlers
+    from bot.handlers import voting as voting_handlers
     base_handlers.register(dp)
+    booking_handlers.register(dp)
+    voting_handlers.register(dp)
+
+    # Scheduler manager
+    from services.scheduler import SchedulerManager
+    from db.session import async_session_maker, create_session_factory, create_engine
+    from core.config import get_settings
+    settings = get_settings()
+    scheduler_manager = SchedulerManager()
+    await scheduler_manager.start()
+    bot.data["scheduler_manager"] = scheduler_manager
+
+    # Initialize global session factory for scheduler jobs
+    engine = create_engine(settings.database)
+    async_session_maker = create_session_factory(engine)
 
     try:
         if settings.telegram.bot_mode == "polling":
@@ -44,6 +61,8 @@ async def main() -> None:
             log.warning("webhook_mode_not_implemented", fallback="polling")
             await dp.start_polling(bot)
     finally:
+        if "scheduler_manager" in bot.data:
+            await bot.data["scheduler_manager"].shutdown()
         await bot.session.close()
         log.info("bot_stopped")
 
