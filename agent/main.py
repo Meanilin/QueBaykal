@@ -7,6 +7,7 @@ Implements VLC CLI control with forced subtitles, audio track selection, process
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import signal
@@ -289,6 +290,8 @@ class MediaLibrary:
         """Scan library and build index."""
         count = 0
         import hashlib
+        import json
+        import subprocess
         
         for ext in ("*.mp4", "*.mkv", "*.avi", "*.mov", "*.webm"):
             for file_path in self.library_path.rglob(ext):
@@ -300,11 +303,15 @@ class MediaLibrary:
                         sha256.update(chunk)
                     checksum = sha256.hexdigest()
                     
+                    # Extract media info via ffprobe
+                    media_info = self._extract_media_info(file_path)
+                    
                     self.index[checksum] = {
                         "path": str(file_path),
                         "name": file_path.name,
                         "size": file_path.stat().st_size,
                         "checksum": checksum,
+                        **media_info,
                     }
                     count += 1
                 except Exception as e:
@@ -312,6 +319,58 @@ class MediaLibrary:
         
         log.info("media_library_scanned", count=count)
         return count
+
+    def _extract_media_info(self, file_path: Path) -> dict:
+        """Extract duration, audio tracks, subtitle tracks using ffprobe."""
+        try:
+            cmd = [
+                "ffprobe", "-v", "quiet", "-print_format", "json",
+                "-show_format", "-show_streams", str(file_path)
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                return {}
+            
+            data = json.loads(result.stdout)
+            
+            # Duration
+            duration = None
+            if "format" in data and "duration" in data["format"]:
+                duration = float(data["format"]["duration"])
+            
+            # Audio tracks
+            audio_tracks = []
+            for stream in data.get("streams", []):
+                if stream.get("codec_type") == "audio":
+                    audio_tracks.append({
+                        "index": stream.get("index"),
+                        "codec": stream.get("codec_name"),
+                        "language": stream.get("tags", {}).get("language", "und"),
+                        "title": stream.get("tags", {}).get("title", ""),
+                        "channels": stream.get("channels"),
+                    })
+            
+            # Subtitle tracks
+            subtitle_tracks = []
+            for stream in data.get("streams", []):
+                if stream.get("codec_type") == "subtitle":
+                    subtitle_tracks.append({
+                        "index": stream.get("index"),
+                        "codec": stream.get("codec_name"),
+                        "language": stream.get("tags", {}).get("language", "und"),
+                        "title": stream.get("tags", {}).get("title", ""),
+                        "forced": stream.get("disposition", {}).get("forced", 0) == 1,
+                        "default": stream.get("disposition", {}).get("default", 0) == 1,
+                    })
+            
+            return {
+                "duration_seconds": int(duration) if duration else None,
+                "audio_tracks": json.dumps(audio_tracks) if audio_tracks else None,
+                "subtitle_tracks": json.dumps(subtitle_tracks) if subtitle_tracks else None,
+            }
+        except Exception as e:
+            log.warning("ffprobe_failed", extra={"file": str(file_path), "error": str(e)})
+            return {}
 
     def find_by_checksum(self, checksum: str) -> Optional[dict]:
         """Find file by checksum."""
