@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
+from fastapi import Request
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -52,10 +53,9 @@ async def session_scope(
             raise
 
 
-async def get_session(
-    factory: async_sessionmaker[AsyncSession],
-) -> AsyncIterator[AsyncSession]:
+async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
     """FastAPI dependency: yield a session, commit on success, rollback on error."""
+    factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
     async with factory() as session:
         try:
             yield session

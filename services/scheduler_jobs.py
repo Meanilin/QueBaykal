@@ -61,8 +61,27 @@ async def end_final_vote_job(vote_session_id: int):
     await _run_job(_inner)
 
 
+async def check_agent_heartbeats_job():
+    """Job: check for stale agent heartbeats."""
+    from db.session import async_session_maker
+    from api.routers.agent import check_agent_heartbeats
+    
+    if async_session_maker is None:
+        return
+    
+    async with async_session_maker() as session:
+        try:
+            await check_agent_heartbeats(session, threshold_seconds=30)
+            await session.commit()
+        except Exception as e:
+            import logging
+            log = logging.getLogger(__name__)
+            log.error("watchdog_job_failed", error=str(e), exc_info=True)
+
+
 # These will be registered as APScheduler callbacks
 __all__ = [
     "end_suggest_job",
     "end_final_vote_job",
+    "check_agent_heartbeats_job",
 ]

@@ -1,0 +1,16 @@
+# TV Agent Configuration
+# Copy to /etc/cinema-bot/agent.yaml or set environment variables
+
+device_id: "tv-living-room-01"
+agent_token: "changeme-generate-with-openssl-rand-base64-32"
+tv_hostname: "living-room-tv"
+media_library_path: "D:/Movies"
+backend_url: "http://your-backend-host:8000"
+poll_interval: 5
+heartbeat_interval: 10
+vlc_path: "C:/Program Files/VideoLAN/VLC/vlc.exe"
+vlc_args:
+  - "--intf"
+  - "dummy"
+  - "--no-video-title-show"
+  - "--fullscreen"

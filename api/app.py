@@ -125,10 +125,8 @@ def create_app() -> FastAPI:
         return response
 
     # --- Routers (will be populated by future epics) ---
-    # from api.routers import bookings, voting, agent
-    # app.include_router(bookings.router, prefix="/api/bookings", tags=["bookings"])
-    # app.include_router(voting.router, prefix="/api/voting", tags=["voting"])
-    # app.include_router(agent.router, prefix="/api/agent", tags=["agent"])
+    from api.routers import agent
+    app.include_router(agent.router, prefix="/api/agent", tags=["agent"])
 
     return app
 
