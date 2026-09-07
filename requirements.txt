@@ -22,3 +22,4 @@ python-dotenv==1.0.1
 httpx==0.28.1
 tenacity==9.0.0
 orjson==3.10.12
+apscheduler==3.11.0

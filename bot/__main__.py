@@ -9,7 +9,8 @@ import asyncio
 
 from bot.factory import create_bot, create_dispatcher
 from core.config import get_settings
-from core.logging import bind_context, configure_logging, get_logger, set_correlation_id
+from core.logging import configure_logging, get_logger
+from db import create_engine, create_session_factory
 
 
 async def main() -> None:
@@ -23,7 +24,13 @@ async def main() -> None:
     log = get_logger("bot")
     log.info("bot_starting", mode=settings.telegram.bot_mode)
 
+    engine = create_engine(settings.database)
+    session_factory = create_session_factory(engine)
+
     bot = create_bot(settings.telegram)
+    # Share session_factory with handlers via bot.data
+    bot.data["session_factory"] = session_factory
+
     dp = create_dispatcher()
 
     # Register base middlewares (correlation_id, user binding)
@@ -33,9 +40,18 @@ async def main() -> None:
     dp.message.middleware(UserContextMiddleware())
     dp.callback_query.middleware(UserContextMiddleware())
 
-    # Register base handlers
+    # Register handlers
     from bot.handlers import base as base_handlers
+    from bot.handlers import bookings as booking_handlers
     base_handlers.register(dp)
+    booking_handlers.register(dp)
+
+    # Scheduler
+    from services.scheduler import SchedulerManager, init_job_handlers
+    init_job_handlers()
+    scheduler_manager = SchedulerManager(session_factory)
+    await scheduler_manager.start()
+    bot.data["scheduler_manager"] = scheduler_manager
 
     try:
         if settings.telegram.bot_mode == "polling":
@@ -44,7 +60,10 @@ async def main() -> None:
             log.warning("webhook_mode_not_implemented", fallback="polling")
             await dp.start_polling(bot)
     finally:
+        if "scheduler_manager" in bot.data:
+            await bot.data["scheduler_manager"].shutdown()
         await bot.session.close()
+        await engine.dispose()
         log.info("bot_stopped")
 
 
