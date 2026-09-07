@@ -1,41 +1,5 @@
 """Services package."""
 
-from services.bookings import (
-    BookingError,
-    BookingNotFoundError,
-    ConflictError,
-    create_booking,
-    get_active_booking,
-    get_booking,
-    get_user_bookings,
-    list_bookings,
-)
-from services.scheduler import SchedulerManager, get_scheduler_manager
-from services.voting import (
-    VotingError,
-    VotingNotFoundError,
-    VotingPermissionError,
-    VotingStateError,
-    add_fire_reaction,
-    cancel_session,
-    cast_final_vote,
-    check_min_votes,
-    create_vote_session,
-    end_suggest,
-    end_vote,
-    get_active_session_for_chat,
-    get_final_vote_counts,
-    get_vote_session,
-    get_winner,
-    list_movies,
-    remove_fire_reaction,
-    retry_vote,
-    run_filter_stage,
-    select_winner,
-    suggest_movie,
-    transition_state,
-)
-
 __all__ = [
     # bookings
     "BookingError",
@@ -72,4 +36,71 @@ __all__ = [
     "select_winner",
     "suggest_movie",
     "transition_state",
+    # downloader
+    "Downloader",
+    "DownloaderError",
+    "DownloadResult",
+    "VideoInfo",
+    "download_winner",
+    "provide_download_link",
+    "get_media_file",
+    "list_media_files",
+    # tv_delivery
+    "TVDelivery",
+    "TVDeliveryError",
+    "DeliveryResult",
+    "tv_delivery",
 ]
+
+
+from services.bookings import (
+    BookingError,
+    BookingNotFoundError,
+    ConflictError,
+    create_booking,
+    get_active_booking,
+    get_booking,
+    get_user_bookings,
+    list_bookings,
+)
+from services.downloader import (
+    Downloader,
+    DownloaderError,
+    DownloadResult,
+    VideoInfo,
+    download_winner,
+    provide_download_link,
+    get_media_file,
+    list_media_files,
+)
+from services.scheduler import SchedulerManager, get_scheduler_manager
+from services.tv_delivery import (
+    TVDelivery,
+    TVDeliveryError,
+    DeliveryResult,
+    tv_delivery,
+)
+from services.voting import (
+    VotingError,
+    VotingNotFoundError,
+    VotingPermissionError,
+    VotingStateError,
+    add_fire_reaction,
+    cancel_session,
+    cast_final_vote,
+    check_min_votes,
+    create_vote_session,
+    end_suggest,
+    end_vote,
+    get_active_session_for_chat,
+    get_final_vote_counts,
+    get_vote_session,
+    get_winner,
+    list_movies,
+    remove_fire_reaction,
+    retry_vote,
+    run_filter_stage,
+    select_winner,
+    suggest_movie,
+    transition_state,
+)

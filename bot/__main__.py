@@ -37,9 +37,11 @@ async def main() -> None:
     from bot.handlers import base as base_handlers
     from bot.handlers import bookings as booking_handlers
     from bot.handlers import voting as voting_handlers
+    from bot.handlers import downloader as downloader_handlers
     base_handlers.register(dp)
     booking_handlers.register(dp)
     voting_handlers.register(dp)
+    downloader_handlers.register(dp)
 
     # Scheduler manager
     from services.scheduler import SchedulerManager
