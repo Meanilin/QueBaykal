@@ -1,7 +1,6 @@
-"""SQLAlchemy ORM models (async).
+"""SQLAlchemy ORM models (async) — extended with Booking models.
 
-Issue #12: foundational models for users, chats, chat_members, tv_devices, chat_tv_bindings.
-All FKs cascade carefully. Time stamps in UTC.
+Issue #19: bookings table with overrun status, APScheduler scheduled_jobs.
 """
 
 from __future__ import annotations
@@ -31,44 +30,55 @@ if TYPE_CHECKING:
 
 class Base(DeclarativeBase):
     """Base for all ORM models."""
-
     pass
 
 
 # --- Enums ---
 
 class TVDeviceStatus(str, enum.Enum):
-    """Lifecycle of a TV device registration."""
-
-    PENDING = "pending"        # awaiting first agent heartbeat
+    PENDING = "pending"
     ONLINE = "online"
     OFFLINE = "offline"
-    DISABLED = "disabled"      # manually disabled by admin
+    DISABLED = "disabled"
 
 
 class ChatTVBindingStatus(str, enum.Enum):
-    """Whether a chat is actively bound to a TV."""
-
     ACTIVE = "active"
     ARCHIVED = "archived"
 
 
 class UserRole(str, enum.Enum):
-    """Per-chat role of a user."""
-
     MEMBER = "member"
     ADMIN = "admin"
-    ROOT = "root"  # global admin, defined by TG_ADMIN_IDS
+    ROOT = "root"
+
+
+class BookingStatus(str, enum.Enum):
+    """Lifecycle of a TV booking.
+
+    PENDING    -> created, awaiting /confirm_booking (1h before start)
+    CONFIRMED  -> confirmed by user, waiting for start time
+    ACTIVE     -> currently watching
+    OVERRUN    -> actual duration exceeded, overlaps next booking
+    COMPLETED  -> finished normally
+    CANCELLED  -> cancelled by initiator/admin
+    EXPIRED    -> auto-expired (no confirmation in time)
+    FAILED     -> download/playback failed
+    """
+
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+    ACTIVE = "active"
+    OVERRUN = "overrun"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+    FAILED = "failed"
 
 
 # --- Models ---
 
 class User(Base):
-    """Telegram user known to the system.
-
-    Created on first interaction. `telegram_id` is the source of truth.
-    """
-
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -90,19 +100,20 @@ class User(Base):
     memberships: Mapped[list["ChatMember"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    bookings: Mapped[list["Booking"]] = relationship(
+        back_populates="creator", foreign_keys="Booking.created_by_user_id"
+    )
 
 
 class Chat(Base):
-    """Telegram chat (group, supergroup, or private)."""
-
     __tablename__ = "chats"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True, nullable=False)
     title: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    chat_type: Mapped[str] = mapped_column(String(16), nullable=False)  # group, supergroup, private
+    chat_type: Mapped[str] = mapped_column(String(16), nullable=False)
     is_private: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
-    settings_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # chat-scoped settings
+    settings_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -119,11 +130,15 @@ class Chat(Base):
     tv_bindings: Mapped[list["ChatTVBinding"]] = relationship(
         back_populates="chat", cascade="all, delete-orphan"
     )
+    bookings: Mapped[list["Booking"]] = relationship(
+        back_populates="chat", cascade="all, delete-orphan"
+    )
+    vote_sessions: Mapped[list["VoteSession"]] = relationship(
+        back_populates="chat", cascade="all, delete-orphan"
+    )
 
 
 class ChatMember(Base):
-    """User membership in a chat with a role."""
-
     __tablename__ = "chat_members"
     __table_args__ = (
         UniqueConstraint("chat_id", "user_id", name="uq_chat_members_chat_user"),
@@ -156,8 +171,6 @@ class ChatMember(Base):
 
 
 class TVDevice(Base):
-    """Physical or virtual TV device managed by an agent."""
-
     __tablename__ = "tv_devices"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -194,12 +207,6 @@ class TVDevice(Base):
 
 
 class ChatTVBinding(Base):
-    """M2M relation: a chat can control one or more TVs.
-
-    Most chats will have exactly one ACTIVE binding, but a chat may be
-    temporarily unbound (e.g. switching TVs).
-    """
-
     __tablename__ = "chat_tv_bindings"
     __table_args__ = (
         Index("ix_chat_tv_bindings_chat_active", "chat_id", "status"),
@@ -236,14 +243,142 @@ class ChatTVBinding(Base):
     tv_device: Mapped[TVDevice] = relationship(back_populates="bindings")
 
 
+class Booking(Base):
+    """TV booking created by a user.
+
+    One booking = one time slot on one TV device.
+    """
+
+    __tablename__ = "bookings"
+    __table_args__ = (
+        Index("ix_bookings_tv_start", "tv_device_id", "booking_start"),
+        Index("ix_bookings_chat_start", "chat_id", "booking_start"),
+        Index("ix_bookings_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chat_id: Mapped[int] = mapped_column(
+        ForeignKey("chats.id", ondelete="CASCADE"), nullable=False
+    )
+    tv_device_id: Mapped[int] = mapped_column(
+        ForeignKey("tv_devices.id", ondelete="CASCADE"), nullable=False
+    )
+    vote_session_id: Mapped[int | None] = mapped_column(
+        ForeignKey("vote_sessions.id", ondelete="SET NULL"), nullable=True
+    )
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)  # instant | planned | mixed
+    status: Mapped[BookingStatus] = mapped_column(
+        Enum(
+            BookingStatus,
+            name="booking_status",
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+        default=BookingStatus.PENDING,
+        server_default=BookingStatus.PENDING.value,
+    )
+    booking_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    booking_end: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    movie_duration_estimate: Mapped[int | None] = mapped_column(Integer, nullable=True)  # minutes
+    created_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    actual_movie_duration: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cancellation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    chat: Mapped[Chat] = relationship(back_populates="bookings")
+    tv_device: Mapped[TVDevice] = relationship()
+    creator: Mapped[User] = relationship(back_populates="bookings")
+    vote_session: Mapped["VoteSession | None"] = relationship(back_populates="booking")
+
+
+class ScheduledJob(Base):
+    """APScheduler jobs persisted in DB for recovery after restart.
+
+    Mirrors apscheduler's job table with additional metadata.
+    """
+
+    __tablename__ = "scheduled_jobs"
+    __table_args__ = (
+        Index("ix_scheduled_jobs_next_run", "next_run_time"),
+        Index("ix_scheduled_jobs_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    apscheduler_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    callback: Mapped[str] = mapped_column(Text, nullable=False)  # dotted path: module:function
+    trigger: Mapped[str] = mapped_column(Text, nullable=False)   # JSON-serialized trigger
+    args: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array
+    kwargs: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON object
+    next_run_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", server_default="pending")
+    misfire_grace_time: Mapped[int] = mapped_column(Integer, nullable=False, default=300, server_default="300")
+    max_instances: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+# VoteSession stub for FK (full model in Epic 2)
+class VoteSession(Base):
+    __tablename__ = "vote_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chat_id: Mapped[int] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), nullable=False)
+    tv_device_id: Mapped[int] = mapped_column(ForeignKey("tv_devices.id", ondelete="CASCADE"), nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    state: Mapped[str] = mapped_column(String(24), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    scheduled_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    movie_duration_estimate: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    chat: Mapped[Chat] = relationship(back_populates="vote_sessions")
+    booking: Mapped[Booking | None] = relationship(back_populates="vote_session")
+
+
 __all__ = [
     "Base",
+    "Booking",
+    "BookingStatus",
     "Chat",
     "ChatMember",
     "ChatTVBinding",
     "ChatTVBindingStatus",
+    "ScheduledJob",
     "TVDevice",
     "TVDeviceStatus",
     "User",
     "UserRole",
+    "VoteSession",
 ]
