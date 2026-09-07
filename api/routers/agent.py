@@ -54,6 +54,7 @@ class ReportRequest(BaseModel):
     command_id: int
     success: bool
     output: str = ""
+    event: str | None = None  # PLAYBACK_STARTED, PLAYBACK_ENDED, ERROR
 
 
 class HeartbeatRequest(BaseModel):
@@ -236,6 +237,13 @@ async def media_index(
 
 
 # --- Internal API for backend to queue commands ---
+
+async def queue_start_playback_command(device_id: str, playback_command_id: int, media_path: str) -> int:
+    """Queue a START_PLAYBACK command for the agent (Epic 5.1)."""
+    return _add_command(device_id, "start_playback", {
+        "playback_command_id": playback_command_id,
+        "media_path": media_path,
+    })
 
 async def queue_play_command(device_id: str, media_path: str) -> int:
     """Queue a play command for the agent."""

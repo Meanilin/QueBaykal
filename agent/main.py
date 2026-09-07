@@ -1,6 +1,7 @@
 """TV Agent - Windows service for VLC control.
 
 Runs on the TV-connected machine, polls backend for commands.
+Implements VLC CLI control with forced subtitles, audio track selection, process monitoring.
 """
 
 from __future__ import annotations
@@ -36,6 +37,10 @@ class AgentConfig:
     heartbeat_interval: int = 10
     vlc_path: str = "vlc"
     vlc_args: list[str] = field(default_factory=lambda: ["--intf", "dummy", "--no-video-title-show"])
+    # Playback preferences
+    audio_languages: list[str] = field(default_factory=lambda: ["ru", "en"])
+    subtitle_languages: list[str] = field(default_factory=lambda: ["ru", "en"])
+    prefer_forced_subtitles: bool = True
 
     @classmethod
     def from_file(cls, path: str) -> "AgentConfig":
@@ -58,47 +63,97 @@ class AgentConfig:
 
 
 class VLCController:
-    """Control VLC via HTTP interface or CLI."""
+    """Control VLC via CLI with forced subtitles and audio track selection."""
 
-    def __init__(self, vlc_path: str = "vlc", vlc_args: list[str] = None):
+    def __init__(
+        self,
+        vlc_path: str = "vlc",
+        vlc_args: list[str] = None,
+        audio_languages: list[str] = None,
+        subtitle_languages: list[str] = None,
+        prefer_forced_subtitles: bool = True,
+    ):
         self.vlc_path = vlc_path
-        self.vlc_args = vlc_args or ["--intf", "dummy", "--no-video-title-show"]
+        self.vlc_args = vlc_args or ["--intf", "dummy", "--no-video-title-show", "--fullscreen"]
+        self.audio_languages = audio_languages or ["ru", "en"]
+        self.subtitle_languages = subtitle_languages or ["ru", "en"]
+        self.prefer_forced_subtitles = prefer_forced_subtitles
+        
         self.process: Optional[subprocess.Popen] = None
         self.current_media: Optional[str] = None
-        self._vlc_http_port = 8081
-        self._vlc_http_password = "cinema-bot"
+        self.current_command_id: Optional[int] = None
+        self._playback_started = asyncio.Event()
+        self._monitor_task: Optional[asyncio.Task] = None
 
-    async def start_vlc(self) -> bool:
-        """Start VLC with HTTP interface."""
-        if self.process and self.process.poll() is None:
-            return True
-
+    def _build_vlc_args(self, media_path: str) -> list[str]:
+        """Build VLC command line with audio/subtitle preferences."""
         args = [
             self.vlc_path,
             *self.vlc_args,
-            "--extraintf", "http",
-            "--http-host", "0.0.0.0",
-            "--http-port", str(self._vlc_http_port),
-            "--http-password", self._vlc_http_password,
+            "--audio-language", ",".join(self.audio_languages),
+            "--sub-language", ",".join(self.subtitle_languages),
         ]
+        
+        if self.prefer_forced_subtitles:
+            args.extend(["--sub-track", "0"])  # 0 = auto (forced preferred)
+        else:
+            args.extend(["--sub-track", "-1"])  # -1 = disabled
+        
+        args.append(media_path)
+        return args
+
+    async def play(self, media_path: str, command_id: int = None) -> bool:
+        """Play media file via VLC CLI."""
+        # Stop any existing playback
+        await self.stop()
+        
+        self.current_command_id = command_id
+        self.current_media = media_path
+        self._playback_started.clear()
+        
+        args = self._build_vlc_args(media_path)
+        log.info("vlc_play", args=" ".join(args), command_id=command_id)
+        
         try:
             self.process = subprocess.Popen(
                 args,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
             )
-            # Wait for VLC to start
-            await asyncio.sleep(2)
-            return self.process.poll() is None
+            
+            # Start process monitor
+            self._monitor_task = asyncio.create_task(self._monitor_process())
+            
+            # Wait for playback to start (VLC outputs to stderr when ready)
+            try:
+                await asyncio.wait_for(self._playback_started.wait(), timeout=10.0)
+                return True
+            except asyncio.TimeoutError:
+                log.warning("vlc_playback_start_timeout", media=media_path)
+                return False
+                
         except Exception as e:
-            log.error("vlc_start_failed", error=str(e))
+            log.error("vlc_play_failed", error=str(e), media=media_path)
             return False
 
-    async def stop_vlc(self):
+    async def stop(self) -> bool:
         """Stop VLC process."""
-        if self.process:
-            self.process.terminate()
+        if self._monitor_task:
+            self._monitor_task.cancel()
             try:
+                await self._monitor_task
+            except asyncio.CancelledError:
+                pass
+            self._monitor_task = None
+        
+        if self.process:
+            try:
+                if os.name == "nt":
+                    self.process.send_signal(signal.CTRL_BREAK_EVENT)
+                else:
+                    self.process.terminate()
+                
                 await asyncio.wait_for(
                     asyncio.get_event_loop().run_in_executor(None, self.process.wait),
                     timeout=5,
@@ -106,122 +161,121 @@ class VLCController:
             except asyncio.TimeoutError:
                 self.process.kill()
                 await asyncio.get_event_loop().run_in_executor(None, self.process.wait)
+            except Exception as e:
+                log.error("vlc_stop_error", error=str(e))
+            
             self.process = None
             self.current_media = None
-
-    async def play(self, media_path: str) -> bool:
-        """Play media file."""
-        await self.start_vlc()
+            self.current_command_id = None
         
-        # Use VLC HTTP interface
-        url = f"http://localhost:{self._vlc_http_port}/requests/status.xml"
-        auth = ("", self._vlc_http_password)
-        
-        async with httpx.AsyncClient() as client:
-            try:
-                # Clear playlist
-                await client.post(
-                    f"http://localhost:{self._vlc_http_port}/requests/status.xml",
-                    params={"command": "pl_empty"},
-                    auth=auth,
-                )
-                # Add media
-                await client.post(
-                    f"http://localhost:{self._vlc_http_port}/requests/status.xml",
-                    params={"command": "in_play", "input": media_path},
-                    auth=auth,
-                )
-                self.current_media = media_path
-                return True
-            except Exception as e:
-                log.error("vlc_play_failed", error=str(e), media=media_path)
-                return False
-
-    async def stop(self) -> bool:
-        """Stop playback."""
-        if not self.process:
-            return True
-        
-        url = f"http://localhost:{self._vlc_http_port}/requests/status.xml"
-        auth = ("", self._vlc_http_password)
-        
-        async with httpx.AsyncClient() as client:
-            try:
-                await client.post(
-                    url,
-                    params={"command": "pl_stop"},
-                    auth=auth,
-                )
-                self.current_media = None
-                return True
-            except Exception as e:
-                log.error("vlc_stop_failed", error=str(e))
-                return False
+        return True
 
     async def pause(self) -> bool:
-        """Pause playback."""
-        url = f"http://localhost:{self._vlc_http_port}/requests/status.xml"
-        auth = ("", self._vlc_http_password)
-        
-        async with httpx.AsyncClient() as client:
-            try:
-                await client.post(
-                    url,
-                    params={"command": "pl_pause"},
-                    auth=auth,
-                )
-                return True
-            except Exception as e:
-                log.error("vlc_pause_failed", error=str(e))
-                return False
+        """Pause/unpause playback (via VLC hotkey simulation or DBus)."""
+        # For CLI mode, we'd need DBus or remote interface
+        # Simplified: not implemented for CLI-only mode
+        log.warning("pause_not_implemented_cli_mode")
+        return False
 
     async def seek(self, position: float) -> bool:
         """Seek to position (0.0 - 1.0)."""
-        url = f"http://localhost:{self._vlc_http_port}/requests/status.xml"
-        auth = ("", self._vlc_http_password)
-        
-        async with httpx.AsyncClient() as client:
-            try:
-                await client.post(
-                    url,
-                    params={"command": "seek", "val": str(position)},
-                    auth=auth,
-                )
-                return True
-            except Exception as e:
-                log.error("vlc_seek_failed", error=str(e))
-                return False
+        # Not easily done with CLI-only mode
+        log.warning("seek_not_implemented_cli_mode")
+        return False
 
     async def set_volume(self, volume: int) -> bool:
         """Set volume (0-100)."""
-        url = f"http://localhost:{self._vlc_http_port}/requests/status.xml"
-        auth = ("", self._vlc_http_password)
+        log.warning("volume_not_implemented_cli_mode")
+        return False
+
+    async def _monitor_process(self):
+        """Monitor VLC process stderr for playback start confirmation."""
+        if not self.process or not self.process.stderr:
+            return
         
-        async with httpx.AsyncClient() as client:
-            try:
-                await client.post(
-                    url,
-                    params={"command": "volume", "val": str(volume)},
-                    auth=auth,
+        try:
+            while self.running and self.process.poll() is None:
+                line = await asyncio.get_event_loop().run_in_executor(
+                    None, self.process.stderr.readline
                 )
-                return True
-            except Exception as e:
-                log.error("vlc_volume_failed", error=str(e))
-                return False
+                if not line:
+                    break
+                
+                line = line.decode("utf-8", errors="ignore").strip()
+                if line:
+                    log.debug("vlc_stderr", line=line)
+                    
+                    # Check for playback start indicators
+                    if any(keyword in line.lower() for keyword in [
+                        "playing", "started", "buffering", "streaming",
+                        "main decoder", "video output", "audio output"
+                    ]):
+                        if not self._playback_started.is_set():
+                            self._playback_started.set()
+                            # Report PLAYBACK_STARTED to backend
+                            await self._report_playback_started()
+            
+            # Process ended
+            if self.process.poll() is not None:
+                log.info("vlc_process_ended", returncode=self.process.poll())
+                await self._report_playback_ended()
+                
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            log.error("vlc_monitor_error", error=str(e))
+
+    async def _report_playback_started(self):
+        """Report PLAYBACK_STARTED to backend."""
+        if not self.current_command_id:
+            return
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"{self.backend_url}/api/agent/report",
+                    json={
+                        "command_id": self.current_command_id,
+                        "success": True,
+                        "output": "PLAYBACK_STARTED",
+                    },
+                    headers={"Authorization": f"Bearer {self.agent_token}"},
+                    timeout=5.0,
+                )
+        except Exception as e:
+            log.error("report_playback_started_failed", error=str(e))
+
+    async def _report_playback_ended(self):
+        """Report playback ended to backend."""
+        if not self.current_command_id:
+            return
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"{self.backend_url}/api/agent/report",
+                    json={
+                        "command_id": self.current_command_id,
+                        "success": True,
+                        "output": "PLAYBACK_ENDED",
+                    },
+                    headers={"Authorization": f"Bearer {self.agent_token}"},
+                    timeout=5.0,
+                )
+        except Exception as e:
+            log.error("report_playback_ended_failed", error=str(e))
 
     async def get_status(self) -> dict:
         """Get VLC status."""
-        url = f"http://localhost:{self._vlc_http_port}/requests/status.xml"
-        auth = ("", self._vlc_http_password)
-        
-        async with httpx.AsyncClient() as client:
-            try:
-                resp = await client.get(url, auth=auth, timeout=2.0)
-                # Parse XML status
-                # Simplified - real implementation would parse XML
-                return {"playing": self.current_media is not None}
-            except Exception:
-                return {"playing": False}
+        is_running = self.process is not None and self.process.poll() is None
+        return {
+            "playing": is_running,
+            "media": self.current_media,
+            "command_id": self.current_command_id,
+        }
+
+    # Need to set these from TVAgent
+    backend_url: str = ""
+    agent_token: str = ""
+    running: bool = True
 
 
 class MediaLibrary:
@@ -235,7 +289,6 @@ class MediaLibrary:
         """Scan library and build index."""
         count = 0
         import hashlib
-        import json
         
         for ext in ("*.mp4", "*.mkv", "*.avi", "*.mov", "*.webm"):
             for file_path in self.library_path.rglob(ext):
@@ -274,7 +327,17 @@ class TVAgent:
 
     def __init__(self, config: AgentConfig):
         self.config = config
-        self.vlc = VLCController(config.vlc_path, config.vlc_args)
+        self.vlc = VLCController(
+            vlc_path=config.vlc_path,
+            vlc_args=config.vlc_args,
+            audio_languages=config.audio_languages,
+            subtitle_languages=config.subtitle_languages,
+            prefer_forced_subtitles=config.prefer_forced_subtitles,
+        )
+        # Inject backend config into VLCController for reporting
+        self.vlc.backend_url = config.backend_url
+        self.vlc.agent_token = config.agent_token
+        
         self.library = MediaLibrary(config.media_library_path)
         self.client = httpx.AsyncClient(
             base_url=config.backend_url,
@@ -335,10 +398,18 @@ class TVAgent:
         result = {"command_id": command_id, "success": False, "output": ""}
         
         try:
-            if command_type == "play":
+            if command_type == "start_playback":
+                media_path = payload.get("media_path")
+                playback_command_id = payload.get("playback_command_id")
+                if media_path:
+                    success = await self.vlc.play(media_path, playback_command_id)
+                    result["success"] = success
+                    result["output"] = f"Playing {media_path}" if success else "Play failed"
+            
+            elif command_type == "play":
                 media_path = payload.get("media_path") or payload.get("url")
                 if media_path:
-                    success = await self.vlc.play(media_path)
+                    success = await self.vlc.play(media_path, command_id)
                     result["success"] = success
                     result["output"] = f"Playing {media_path}" if success else "Play failed"
             
@@ -425,6 +496,7 @@ class TVAgent:
     async def run(self):
         """Main agent loop."""
         self.running = True
+        self.vlc.running = True
         
         # Initial register
         await self.register()
@@ -432,9 +504,6 @@ class TVAgent:
         # Initial media index
         self.library.scan()
         await self.report_media_index()
-        
-        # Start VLC
-        await self.vlc.start_vlc()
         
         # Start background tasks
         self._poll_task = asyncio.create_task(self._poll_loop())
@@ -458,13 +527,14 @@ class TVAgent:
     async def shutdown(self):
         """Graceful shutdown."""
         self.running = False
+        self.vlc.running = False
         
         if self._poll_task:
             self._poll_task.cancel()
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
         
-        await self.vlc.stop_vlc()
+        await self.vlc.stop()
         await self.client.aclose()
         log.info("agent_shutdown_complete")
 
