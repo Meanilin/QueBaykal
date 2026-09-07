@@ -1,5 +1,3 @@
-"""Services package."""
-
 __all__ = [
     # bookings
     "BookingError",
@@ -50,6 +48,19 @@ __all__ = [
     "TVDeliveryError",
     "DeliveryResult",
     "tv_delivery",
+    # notifications
+    "NotificationError",
+    "NotificationPermissionError",
+    "get_chat_reminder_settings",
+    "update_chat_reminder_settings",
+    "schedule_booking_reminders",
+    "send_personal_reminder",
+    "send_group_reminder",
+    "notify_mode_change",
+    "notify_overrun",
+    "schedule_voting_reminders",
+    "voting_phase_reminder",
+    "set_reminders_enabled",
 ]
 
 
@@ -72,6 +83,20 @@ from services.downloader import (
     provide_download_link,
     get_media_file,
     list_media_files,
+)
+from services.notifications import (
+    NotificationError,
+    NotificationPermissionError,
+    get_chat_reminder_settings,
+    update_chat_reminder_settings,
+    schedule_booking_reminders,
+    send_personal_reminder,
+    send_group_reminder,
+    notify_mode_change,
+    notify_overrun,
+    schedule_voting_reminders,
+    voting_phase_reminder,
+    set_reminders_enabled,
 )
 from services.scheduler import SchedulerManager, get_scheduler_manager
 from services.tv_delivery import (

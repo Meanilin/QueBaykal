@@ -79,9 +79,65 @@ async def check_agent_heartbeats_job():
             log.error("watchdog_job_failed", error=str(e), exc_info=True)
 
 
+async def send_personal_reminder_job(booking_id: int, user_id: int, minutes_before: int):
+    """Job: send personal reminder."""
+    from bot.notifiers import notification_dispatcher
+    from db.session import async_session_maker
+    
+    if async_session_maker is None:
+        return
+    
+    async with async_session_maker() as session:
+        try:
+            await notification_dispatcher.send_personal_reminder(
+                session, booking_id, user_id, minutes_before
+            )
+        except Exception as e:
+            import logging
+            log = logging.getLogger(__name__)
+            log.error("personal_reminder_job_failed", error=str(e), exc_info=True)
+
+
+async def send_group_reminder_job(booking_id: int):
+    """Job: send group reminder."""
+    from bot.notifiers import notification_dispatcher
+    from db.session import async_session_maker
+    
+    if async_session_maker is None:
+        return
+    
+    async with async_session_maker() as session:
+        try:
+            await notification_dispatcher.send_group_reminder(session, booking_id)
+        except Exception as e:
+            import logging
+            log = logging.getLogger(__name__)
+            log.error("group_reminder_job_failed", error=str(e), exc_info=True)
+
+
+async def voting_phase_reminder_job(vote_session_id: int, phase: str):
+    """Job: send voting phase reminder."""
+    from bot.notifiers import notification_dispatcher
+    from db.session import async_session_maker
+    
+    if async_session_maker is None:
+        return
+    
+    async with async_session_maker() as session:
+        try:
+            await notification_dispatcher.voting_phase_reminder(session, vote_session_id, phase)
+        except Exception as e:
+            import logging
+            log = logging.getLogger(__name__)
+            log.error("voting_reminder_job_failed", error=str(e), exc_info=True)
+
+
 # These will be registered as APScheduler callbacks
 __all__ = [
     "end_suggest_job",
     "end_final_vote_job",
     "check_agent_heartbeats_job",
+    "send_personal_reminder_job",
+    "send_group_reminder_job",
+    "voting_phase_reminder_job",
 ]
