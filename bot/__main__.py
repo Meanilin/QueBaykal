@@ -10,6 +10,8 @@ import asyncio
 from bot.factory import create_bot, create_dispatcher
 from core.config import get_settings
 from core.logging import bind_context, configure_logging, get_logger, set_correlation_id
+from db.session import create_engine, create_session_factory
+from services.scheduler import SchedulerManager
 
 
 async def main() -> None:
@@ -23,7 +25,13 @@ async def main() -> None:
     log = get_logger("bot")
     log.info("bot_starting", mode=settings.telegram.bot_mode)
 
+    engine = create_engine(settings.database)
+    session_factory = create_session_factory(engine)
+
     bot = create_bot(settings.telegram)
+    # Share session_factory with handlers via bot.data
+    bot.data["session_factory"] = session_factory
+
     dp = create_dispatcher()
 
     # Register base middlewares (correlation_id, user binding)
@@ -33,7 +41,7 @@ async def main() -> None:
     dp.message.middleware(UserContextMiddleware())
     dp.callback_query.middleware(UserContextMiddleware())
 
-    # Register base handlers
+    # Register handlers
     from bot.handlers import base as base_handlers
     from bot.handlers import bookings as booking_handlers
     from bot.handlers import voting as voting_handlers
@@ -48,17 +56,14 @@ async def main() -> None:
     observability_handlers.register(dp)
 
     # Scheduler manager
-    from services.scheduler import SchedulerManager
-    from db.session import async_session_maker, create_session_factory, create_engine
-    from core.config import get_settings
-    settings = get_settings()
-    scheduler_manager = SchedulerManager()
+    scheduler_manager = SchedulerManager(session_factory)
     await scheduler_manager.start()
     bot.data["scheduler_manager"] = scheduler_manager
 
-    # Initialize global session factory for scheduler jobs
-    engine = create_engine(settings.database)
-    async_session_maker = create_session_factory(engine)
+    # Set global scheduler manager for scheduler jobs
+    from services.scheduler import get_scheduler_manager
+    import services.scheduler
+    services.scheduler._scheduler_manager = scheduler_manager
 
     try:
         if settings.telegram.bot_mode == "polling":
@@ -70,6 +75,7 @@ async def main() -> None:
         if "scheduler_manager" in bot.data:
             await bot.data["scheduler_manager"].shutdown()
         await bot.session.close()
+        await engine.dispose()
         log.info("bot_stopped")
 
 

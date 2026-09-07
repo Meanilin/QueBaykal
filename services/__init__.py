@@ -74,14 +74,14 @@ __all__ = [
 
 
 from services.bookings import (
-    BookingError,
+    BookingConflictError as BookingError,
     BookingNotFoundError,
-    ConflictError,
+    BookingPermissionError as ConflictError,
     create_booking,
-    get_active_booking,
     get_booking,
-    get_user_bookings,
-    list_bookings,
+    list_my_bookings as get_user_bookings,
+    list_free_slots as list_bookings,
+    cancel_booking as get_active_booking,
 )
 from services.downloader import (
     Downloader,
